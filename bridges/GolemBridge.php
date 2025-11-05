@@ -94,15 +94,16 @@ class GolemBridge extends FeedExpander
                 }
             }
 
-            $item['content'] .= $this->extractContent($articlePage, $item['content']);
-
             // next page
-            $nextUri = $articlePage->find('li.go-pagination__item--next>a', 0);
+            $nextUri = $articlePage->find('li.go-pagination__item--next a', 0);
             if ($nextUri) {
                 $uri = $nextUri->href;
             } else {
                 $uri = null;
             }
+
+            // Only extract the content (and remove content) after all pre-processing is done
+            $item['content'] .= $this->extractContent($articlePage, $item['content']);
         }
 
         return $item;
@@ -114,16 +115,30 @@ class GolemBridge extends FeedExpander
 
         $article = $page->find('article', 0);
 
-        //built youtube iframes
-        foreach ($article->find('.go-embed-container') as &$embedcontent) {
-            $ytscript = $page->find('script', 14);
-            if (preg_match('/(www.youtube.com.*?)\"/', $ytscript->innertext, $link)) {
-                $link = 'https://' . str_replace('\\', '', $link[1]);
-                $embedcontent->innertext .= <<<EOT
-                    <iframe width="560" height="315" src="$link" title="YouTube video player" frameborder="0"
+        // extract embeds from script tags (unfortunately no JSON)
+        $embedSrcs = [];
+        foreach ($page->find('script') as $script) {
+            // Ungreedy match to get precisely the snippet of one embed
+            if (preg_match_all('/type:\s*\"Embed(.*)urlPrivacy:/U', $script, $embeds)) {
+                foreach ($embeds[1] as $embed) {
+                    if (preg_match('/src:\s*\"([^\"]+)\"/', $embed, $src)) {
+                        $embedSrcs[] = $src[1];
+                    }
+                }
+            }
+        }
+        // inject the embed into the HTML placeholder
+        $placeholders = $article->find('.go-embed-container');
+        foreach (range(0, count($placeholders) - 1) as $i) {
+            if (array_key_exists($i, $embedSrcs)) {
+                $src = $embedSrcs[$i];
+                if (preg_match('/youtube(-nocookie)?\.com/', $src, $match)) {
+                    $placeholders[$i]->innertext = <<<EOT
+                    <iframe width="560" height="315" src="$src" title="YouTube video player" frameborder="0"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                     referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>';
-                EOT;
+                    EOT;
+                }
             }
         }
 
@@ -140,7 +155,7 @@ class GolemBridge extends FeedExpander
         // delete known bad elements and unwanted gallery images
         foreach (
             $article->find('div[id*="adtile"], #job-market, #seminars, iframe, .go-article-header__title, .go-article-header__kicker, .go-label--sponsored,
-                        .gbox_affiliate, div.toc, .go-button-bar, .go-alink-list, .go-teaser-block, .go-vh, .go-paywall, .go-index-link, .go-pagination__list,
+                        .gbox_affiliate, div.toc, .go-button-bar, .go-alink-list, .go-teaser-block, .go-vh, .go-paywall, .go-index, .go-pagination__list,
                         .go-gallery .[data-active="false"], .go-article-header__series') as $bad
         ) {
             $bad->remove();
